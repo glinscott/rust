@@ -157,6 +157,7 @@ check-test: cleantestlibs cleantmptestlogs all check-stage2-rfail
 
 check-lite: cleantestlibs cleantmptestlogs \
 	check-stage2-std check-stage2-extra check-stage2-rpass \
+	check-stage2-rustpkg check-stage2-rusti \
 	check-stage2-rfail check-stage2-cfail
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
 
