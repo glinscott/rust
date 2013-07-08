@@ -1233,7 +1233,6 @@ pub trait StrSlice<'self> {
     fn to_utf16(&self) -> ~[u16];
     fn is_char_boundary(&self, index: uint) -> bool;
     fn char_range_at(&self, start: uint) -> CharRange;
-    priv fn multibyte_char_range_at(&self, i: uint) -> CharRange;
     fn char_at(&self, i: uint) -> char;
     fn char_range_at_reverse(&self, start: uint) -> CharRange;
     fn char_at_reverse(&self, i: uint) -> char;
@@ -1733,23 +1732,24 @@ impl<'self> StrSlice<'self> for &'self str {
             return CharRange {ch: self[i] as char, next: i + 1 };
         }
 
-        return self.multibyte_char_range_at(i);
+        fn multibyte_char_range_at(s: &str, i: uint) -> CharRange {
+            let mut val = s[i] as uint;
+            let w = UTF8_CHAR_WIDTH[val] as uint;
+            assert!((w != 0));
+
+            // First byte is special, only want bottom 5 bits for width 2, 4 bits
+            // for width 3, and 3 bits for width 4
+            val &= 0x7Fu >> w;
+            val = (val << 6) | (s[i + 1] & 63u8) as uint;
+            if w > 2 { val = (val << 6) | (s[i + 2] & 63u8) as uint; }
+            if w > 3 { val = (val << 6) | (s[i + 3] & 63u8) as uint; }
+
+            return CharRange {ch: val as char, next: i + w};
+        }
+
+        return multibyte_char_range_at(*self, i);
     }
 
-    fn multibyte_char_range_at(&self, i: uint) -> CharRange {
-        let mut val = self[i] as uint;
-        let w = UTF8_CHAR_WIDTH[val] as uint;
-        assert!((w != 0));
-
-        // First byte is special, only want bottom 5 bits for width 2, 4 bits
-        // for width 3, and 3 bits for width 4
-        val &= 0x7Fu >> w;
-        val = (val << 6) | (self[i + 1] & 63u8) as uint;
-        if w > 2 { val = (val << 6) | (self[i + 2] & 63u8) as uint; }
-        if w > 3 { val = (val << 6) | (self[i + 3] & 63u8) as uint; }
-
-        return CharRange {ch: val as char, next: i + w};
-    }
 
     /// Plucks the character starting at the `i`th byte of a string
     #[inline]
