@@ -722,17 +722,29 @@ pub fn count_bytes<'b>(s: &'b str, start: uint, n: uint) -> uint {
     end - start
 }
 
+// https://tools.ietf.org/html/rfc3629 
+static UTF8_CHAR_WIDTH: [u8, ..256] = [
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 32
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 64
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 96
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 128
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 160
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 192
+2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, // 224
+3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, // 240
+4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4, // 256
+];
+
 /// Given a first byte, determine how many bytes are in this UTF-8 character
 pub fn utf8_char_width(b: u8) -> uint {
-    let byte: uint = b as uint;
-    if byte < 128u { return 1u; }
-    // Not a valid start byte
-    if byte < 192u { return 0u; }
-    if byte < 224u { return 2u; }
-    if byte < 240u { return 3u; }
-    if byte < 248u { return 4u; }
-    if byte < 252u { return 5u; }
-    return 6u;
+    return UTF8_CHAR_WIDTH[b] as uint;
 }
 
 #[allow(missing_doc)]
@@ -1221,6 +1233,7 @@ pub trait StrSlice<'self> {
     fn to_utf16(&self) -> ~[u16];
     fn is_char_boundary(&self, index: uint) -> bool;
     fn char_range_at(&self, start: uint) -> CharRange;
+    priv fn multibyte_char_range_at(&self, i: uint) -> CharRange;
     fn char_at(&self, i: uint) -> char;
     fn char_range_at_reverse(&self, start: uint) -> CharRange;
     fn char_at_reverse(&self, i: uint) -> char;
@@ -1714,26 +1727,28 @@ impl<'self> StrSlice<'self> for &'self str {
      * If `i` is greater than or equal to the length of the string.
      * If `i` is not the index of the beginning of a valid UTF-8 character.
      */
+    #[inline]
     fn char_range_at(&self, i: uint) -> CharRange {
-        let b0 = self[i];
-        let w = utf8_char_width(b0);
-        assert!((w != 0u));
-        if w == 1u { return CharRange {ch: b0 as char, next: i + 1u}; }
-        let mut val = 0u;
-        let end = i + w;
-        let mut i = i + 1u;
-        while i < end {
-            let byte = self[i];
-            assert_eq!(byte & 192u8, TAG_CONT_U8);
-            val <<= 6u;
-            val += (byte & 63u8) as uint;
-            i += 1u;
+        if (self[i] < 128u8) {
+            return CharRange {ch: self[i] as char, next: i + 1 };
         }
-        // Clunky way to get the right bits from the first byte. Uses two shifts,
-        // the first to clip off the marker bits at the left of the byte, and then
-        // a second (as uint) to get it to the right position.
-        val += ((b0 << ((w + 1u) as u8)) as uint) << ((w - 1u) * 6u - w - 1u);
-        return CharRange {ch: val as char, next: i};
+
+        return self.multibyte_char_range_at(i);
+    }
+
+    fn multibyte_char_range_at(&self, i: uint) -> CharRange {
+        let mut val = self[i] as uint;
+        let w = UTF8_CHAR_WIDTH[val] as uint;
+        assert!((w != 0));
+
+        // First byte is special, only want bottom 5 bits for width 2, 4 bits
+        // for width 3, and 3 bits for width 4
+        val &= 0x7Fu >> w;
+        val = (val << 6) | (self[i + 1] & 63u8) as uint;
+        if w > 2 { val = (val << 6) | (self[i + 2] & 63u8) as uint; }
+        if w > 3 { val = (val << 6) | (self[i + 3] & 63u8) as uint; }
+
+        return CharRange {ch: val as char, next: i + w};
     }
 
     /// Plucks the character starting at the `i`th byte of a string
@@ -2014,6 +2029,7 @@ impl NullTerminatedStr for @str {
 pub trait OwnedStr {
     fn push_str_no_overallocate(&mut self, rhs: &str);
     fn push_str(&mut self, rhs: &str);
+    priv fn push_multibyte_char(&mut self, c: char);
     fn push_char(&mut self, c: char);
     fn pop_char(&mut self) -> char;
     fn shift_char(&mut self) -> char;
@@ -2062,14 +2078,11 @@ impl OwnedStr for ~str {
             raw::set_len(self, llen + rlen);
         }
     }
-    /// Appends a character to the back of a string
-    #[inline]
-    fn push_char(&mut self, c: char) {
-        assert!(c as uint <= 0x10ffff); // FIXME: #7609: should be enforced on all `char`
+
+    fn push_multibyte_char(&mut self, c: char) {
         unsafe {
             let code = c as uint;
-            let nb = if code < MAX_ONE_B { 1u }
-            else if code < MAX_TWO_B { 2u }
+            let nb = if code < MAX_TWO_B { 2u }
             else if code < MAX_THREE_B { 3u }
             else { 4u };
             let len = self.len();
@@ -2079,9 +2092,6 @@ impl OwnedStr for ~str {
             do as_buf(*self) |buf, _len| {
                 let buf: *mut u8 = ::cast::transmute(buf);
                 match nb {
-                    1u => {
-                        *ptr::mut_offset(buf, off) = code as u8;
-                    }
                     2u => {
                         *ptr::mut_offset(buf, off) = (code >> 6u & 31u | TAG_TWO_B) as u8;
                         *ptr::mut_offset(buf, off + 1u) = (code & 63u | TAG_CONT) as u8;
@@ -2101,6 +2111,26 @@ impl OwnedStr for ~str {
                 }
             }
             raw::set_len(self, new_len);
+        }
+    }
+
+    /// Appends a character to the back of a string
+    #[inline]
+    fn push_char(&mut self, c: char) {
+        assert!(c as uint <= 0x10ffff); // FIXME: #7609: should be enforced on all `char`
+        unsafe {
+            let code = c as uint;
+            if code < MAX_ONE_B {
+                let len = self.len();
+                self.reserve_at_least(len + 1);
+                do as_buf(*self) |buf, _len| {
+                    let buf: *mut u8 = ::cast::transmute(buf);
+                    *ptr::mut_offset(buf, len) = code as u8;
+                }
+                raw::set_len(self, len + 1);
+                return;
+            }
+            self.push_multibyte_char(c); 
         }
     }
     /**
