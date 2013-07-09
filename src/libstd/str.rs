@@ -2086,6 +2086,7 @@ impl OwnedStr for ~str {
         let code = c as uint;
         if code < MAX_ONE_B {
             unsafe {
+                let len = self.len();
                 let v: &mut ~[u8] = cast::transmute(self);
                 v.reserve_at_least(len + 1);
                 v[len] = code as u8;
