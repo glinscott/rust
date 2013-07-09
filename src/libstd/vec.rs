@@ -1134,8 +1134,10 @@ impl<T> OwnedVector<T> for ~[T] {
         // Only make the (slow) call into the runtime if we have to
         use managed;
         if self.capacity() < n {
-            unsafe {
-                let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
+            // Don't inline the actual expand call, since this function is called from many hot paths
+            #[inline(never)]
+            unsafe fn expand<T>(s: &mut ~[T], n: uint) {
+                let ptr: *mut *mut raw::VecRepr = cast::transmute(s);
                 let td = get_tydesc::<T>();
                 if ((**ptr).box_header.ref_count ==
                     managed::raw::RC_MANAGED_UNIQUE) {
@@ -1147,6 +1149,8 @@ impl<T> OwnedVector<T> for ~[T] {
                     (**ptr).unboxed.alloc = alloc;
                 }
             }
+
+            unsafe { expand(self, n); }
         }
     }
 
@@ -1165,8 +1169,10 @@ impl<T> OwnedVector<T> for ~[T] {
     fn reserve(&mut self, n: uint) {
         // Only make the (slow) call into the runtime if we have to
         if self.capacity() < n {
-            unsafe {
-                let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
+            // Don't inline the actual expand call, since this function is called from many hot paths
+            #[inline(never)]
+            unsafe fn expand<T>(s: &mut ~[T], n: uint) {
+                let ptr: *mut *mut raw::VecRepr = cast::transmute(s);
                 let td = get_tydesc::<T>();
                 if contains_managed::<T>() {
                     vec_reserve_shared_actual(td, ptr as **raw::VecRepr, n as libc::size_t);
@@ -1177,6 +1183,8 @@ impl<T> OwnedVector<T> for ~[T] {
                     (**ptr).unboxed.alloc = alloc;
                 }
             }
+
+            unsafe { expand(self, n); }
         }
     }
 
@@ -1194,6 +1202,7 @@ impl<T> OwnedVector<T> for ~[T] {
      *
      * * n - The number of elements to reserve space for
      */
+    #[inline]
     fn reserve_at_least(&mut self, n: uint) {
         self.reserve(uint::next_power_of_two(n));
     }
@@ -1215,19 +1224,11 @@ impl<T> OwnedVector<T> for ~[T] {
             let fill = (**repr).unboxed.fill;
             if (**repr).unboxed.alloc <= fill {
                 // need more space
-                reserve_no_inline(self);
+                let new_len = self.len() + 1;
+                self.reserve_at_least(new_len);
             }
 
             self.push_fast(t);
-        }
-
-        // this peculiar function is because reserve_at_least is very
-        // large (because of reserve), and will be inlined, which
-        // makes push too large.
-        #[inline(never)]
-        fn reserve_no_inline<T>(v: &mut ~[T]) {
-            let new_len = v.len() + 1;
-            v.reserve_at_least(new_len);
         }
     }
 
