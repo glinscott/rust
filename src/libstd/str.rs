@@ -2087,7 +2087,9 @@ impl OwnedStr for ~str {
         if code < MAX_ONE_B {
             unsafe {
                 let v: &mut ~[u8] = cast::transmute(self);
-                v.push(code as u8);
+                v.reserve_at_least(len + 1);
+                v[len] = code as u8;
+                v.push_fast(0);
                 return;
             }
         }
@@ -2098,18 +2100,19 @@ impl OwnedStr for ~str {
                 let v: &mut ~[u8] = cast::transmute(s);
                 v.reserve_at_least(len + 4);
                 if code < MAX_TWO_B { 
-                    v.push_fast((code >> 6u & 31u | TAG_TWO_B) as u8);
+                    v[len] = (code >> 6u & 31u | TAG_TWO_B) as u8;
                     v.push_fast((code & 63u | TAG_CONT) as u8);
                 } else if code < MAX_THREE_B {
-                    v.push_fast((code >> 12u & 15u | TAG_THREE_B) as u8);
+                    v[len] = (code >> 12u & 15u | TAG_THREE_B) as u8;
                     v.push_fast((code >> 6u & 63u | TAG_CONT) as u8);
                     v.push_fast((code & 63u | TAG_CONT) as u8);
                 } else {
-                    v.push_fast((code >> 18u & 7u | TAG_FOUR_B) as u8);
+                    v[len] = (code >> 18u & 7u | TAG_FOUR_B) as u8;
                     v.push_fast((code >> 12u & 63u | TAG_CONT) as u8);
                     v.push_fast((code >> 6u & 63u | TAG_CONT) as u8);
                     v.push_fast((code & 63u | TAG_CONT) as u8);
                 }
+                v.push_fast(0);
             }
         }
         push_multibyte_char(self, code);
@@ -2442,7 +2445,11 @@ mod tests {
     fn test_push_char() {
         let mut data = ~"ประเทศไทย中";
         data.push_char('华');
-        assert_eq!(~"ประเทศไทย中华", data);
+        data.push_char('b'); // 1 byte
+        data.push_char('¢'); // 2 byte
+        data.push_char('€'); // 3 byte
+        data.push_char('𤭢'); // 4 byte
+        assert_eq!(~"ประเทศไทย中华b¢€𤭢", data);
     }
 
     #[test]
@@ -3250,6 +3257,19 @@ mod tests {
         "1234".cmp(& &"1234") == Equal;
         "12345555".cmp(& &"123456") == Less;
         "22".cmp(& &"1234") == Greater;
+    }
+
+    #[test]
+    fn test_char_range_at() {
+        let data = ~"b¢€𤭢𤭢€¢b";
+        assert_eq!('b', data.char_range_at(0).ch);
+        assert_eq!('¢', data.char_range_at(1).ch);
+        assert_eq!('€', data.char_range_at(3).ch);
+        assert_eq!('𤭢', data.char_range_at(6).ch);
+        assert_eq!('𤭢', data.char_range_at(10).ch);
+        assert_eq!('€', data.char_range_at(14).ch);
+        assert_eq!('¢', data.char_range_at(17).ch);
+        assert_eq!('b', data.char_range_at(19).ch);
     }
 
     #[test]
