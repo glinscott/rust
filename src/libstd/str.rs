@@ -2083,37 +2083,63 @@ impl OwnedStr for ~str {
     #[inline]
     fn push_char(&mut self, c: char) {
         assert!(c as uint <= 0x10ffff); // FIXME: #7609: should be enforced on all `char`
+
+        #[inline(never)]
+        fn reserve_at_least(s: &mut ~str, len: uint) {
+            s.reserve_at_least(len);
+        }
+
         let code = c as uint;
+        // Fast path for one byte case
         if code < MAX_ONE_B {
             unsafe {
                 let len = self.len();
-                let v: &mut ~[u8] = cast::transmute(self);
-                v.reserve_at_least(len + 1);
-                v[len] = code as u8;
-                v.push_fast(0);
+                if len + 1 >= self.capacity() {
+                    reserve_at_least(self, len + 1);
+                }
+                do as_buf(*self) |buf, _len| {
+                    let buf: *mut u8 = ::cast::transmute(buf);
+                    *ptr::mut_offset(buf, len) = code as u8;
+                }
+                raw::set_len(self, len + 1);
                 return;
             }
         }
 
+        // Multibyte is in it's own function to avoid bloat when inlining push_char
         fn push_multibyte_char(s: &mut ~str, code: uint) {
             unsafe {
                 let len = s.len();
-                let v: &mut ~[u8] = cast::transmute(s);
-                v.reserve_at_least(len + 4);
-                if code < MAX_TWO_B { 
-                    v[len] = (code >> 6u & 31u | TAG_TWO_B) as u8;
-                    v.push_fast((code & 63u | TAG_CONT) as u8);
-                } else if code < MAX_THREE_B {
-                    v[len] = (code >> 12u & 15u | TAG_THREE_B) as u8;
-                    v.push_fast((code >> 6u & 63u | TAG_CONT) as u8);
-                    v.push_fast((code & 63u | TAG_CONT) as u8);
-                } else {
-                    v[len] = (code >> 18u & 7u | TAG_FOUR_B) as u8;
-                    v.push_fast((code >> 12u & 63u | TAG_CONT) as u8);
-                    v.push_fast((code >> 6u & 63u | TAG_CONT) as u8);
-                    v.push_fast((code & 63u | TAG_CONT) as u8);
+                let w = cond!(
+                    (code < MAX_TWO_B) { 2 }
+                    (code < MAX_THREE_B) { 3 }
+                    _ { 4 }
+                );
+                if len + w >= s.capacity() {
+                    reserve_at_least(s, len + w);
                 }
-                v.push_fast(0);
+                do as_buf(*s) |buf, _len| {
+                    let buf: *mut u8 = ::cast::transmute(buf);
+                    match w {
+                        2 => {
+                            *ptr::mut_offset(buf, len) = (code >> 6u & 31u | TAG_TWO_B) as u8;
+                            *ptr::mut_offset(buf, len + 1) = (code & 63u | TAG_CONT) as u8;
+                        }
+                        3 => {
+                            *ptr::mut_offset(buf, len) = (code >> 12u & 15u | TAG_THREE_B) as u8;
+                            *ptr::mut_offset(buf, len + 1) = (code >> 6u & 63u | TAG_CONT) as u8;
+                            *ptr::mut_offset(buf, len + 2) = (code & 63u | TAG_CONT) as u8;
+                        }
+                        4 => {
+                            *ptr::mut_offset(buf, len) = (code >> 18u & 7u | TAG_FOUR_B) as u8;
+                            *ptr::mut_offset(buf, len + 1) = (code >> 12u & 63u | TAG_CONT) as u8;
+                            *ptr::mut_offset(buf, len + 2) = (code >> 6u & 63u | TAG_CONT) as u8;
+                            *ptr::mut_offset(buf, len + 3) = (code & 63u | TAG_CONT) as u8;
+                        }
+                        _ => {}
+                    }
+                }
+                raw::set_len(s, len + w);
             }
         }
         push_multibyte_char(self, code);
