@@ -1135,7 +1135,6 @@ impl<T> OwnedVector<T> for ~[T] {
         use managed;
         if self.capacity() < n {
             // Don't inline the actual expand call, since this function is called from many hot paths
-            #[inline(never)]
             unsafe fn expand<T>(s: &mut ~[T], n: uint) {
                 let ptr: *mut *mut raw::VecRepr = cast::transmute(s);
                 let td = get_tydesc::<T>();
@@ -1170,7 +1169,6 @@ impl<T> OwnedVector<T> for ~[T] {
         // Only make the (slow) call into the runtime if we have to
         if self.capacity() < n {
             // Don't inline the actual expand call, since this function is called from many hot paths
-            #[inline(never)]
             unsafe fn expand<T>(s: &mut ~[T], n: uint) {
                 let ptr: *mut *mut raw::VecRepr = cast::transmute(s);
                 let td = get_tydesc::<T>();
