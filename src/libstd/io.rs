@@ -917,6 +917,7 @@ fn convert_whence(whence: SeekStyle) -> i32 {
 impl Reader for *libc::FILE {
     fn read(&self, bytes: &mut [u8], len: uint) -> uint {
         unsafe {
+            println(str::from_bytes(bytes));
             do bytes.as_mut_buf |buf_p, buf_len| {
                 assert!(buf_len >= len);
 

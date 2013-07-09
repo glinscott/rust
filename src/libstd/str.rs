@@ -725,21 +725,21 @@ pub fn count_bytes<'b>(s: &'b str, start: uint, n: uint) -> uint {
 // https://tools.ietf.org/html/rfc3629 
 static UTF8_CHAR_WIDTH: [u8, ..256] = [
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 32
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 0x1F
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 64
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 0x3F
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 96
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 0x5F
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 128
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // 0x7F
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 160
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 0x9F
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 192
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 0xBF
 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, // 224
-3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, // 240
-4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4, // 256
+2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, // 0xDF
+3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, // 0xEF
+4,4,4,4,4,0,0,0,0,0,0,0,0,0,0,0, // 0xFF
 ];
 
 /// Given a first byte, determine how many bytes are in this UTF-8 character
@@ -1732,6 +1732,7 @@ impl<'self> StrSlice<'self> for &'self str {
             return CharRange {ch: self[i] as char, next: i + 1 };
         }
 
+        // Multibyte case is a fn to allow char_range_at to inline cleanly
         fn multibyte_char_range_at(s: &str, i: uint) -> CharRange {
             let mut val = s[i] as uint;
             let w = UTF8_CHAR_WIDTH[val] as uint;
@@ -2029,7 +2030,6 @@ impl NullTerminatedStr for @str {
 pub trait OwnedStr {
     fn push_str_no_overallocate(&mut self, rhs: &str);
     fn push_str(&mut self, rhs: &str);
-    priv fn push_multibyte_char(&mut self, c: char);
     fn push_char(&mut self, c: char);
     fn pop_char(&mut self) -> char;
     fn shift_char(&mut self) -> char;
@@ -2079,60 +2079,42 @@ impl OwnedStr for ~str {
         }
     }
 
-    fn push_multibyte_char(&mut self, c: char) {
-        unsafe {
-            let code = c as uint;
-            let nb = if code < MAX_TWO_B { 2u }
-            else if code < MAX_THREE_B { 3u }
-            else { 4u };
-            let len = self.len();
-            let new_len = len + nb;
-            self.reserve_at_least(new_len);
-            let off = len;
-            do as_buf(*self) |buf, _len| {
-                let buf: *mut u8 = ::cast::transmute(buf);
-                match nb {
-                    2u => {
-                        *ptr::mut_offset(buf, off) = (code >> 6u & 31u | TAG_TWO_B) as u8;
-                        *ptr::mut_offset(buf, off + 1u) = (code & 63u | TAG_CONT) as u8;
-                    }
-                    3u => {
-                        *ptr::mut_offset(buf, off) = (code >> 12u & 15u | TAG_THREE_B) as u8;
-                        *ptr::mut_offset(buf, off + 1u) = (code >> 6u & 63u | TAG_CONT) as u8;
-                        *ptr::mut_offset(buf, off + 2u) = (code & 63u | TAG_CONT) as u8;
-                    }
-                    4u => {
-                        *ptr::mut_offset(buf, off) = (code >> 18u & 7u | TAG_FOUR_B) as u8;
-                        *ptr::mut_offset(buf, off + 1u) = (code >> 12u & 63u | TAG_CONT) as u8;
-                        *ptr::mut_offset(buf, off + 2u) = (code >> 6u & 63u | TAG_CONT) as u8;
-                        *ptr::mut_offset(buf, off + 3u) = (code & 63u | TAG_CONT) as u8;
-                    }
-                    _ => {}
-                }
-            }
-            raw::set_len(self, new_len);
-        }
-    }
-
     /// Appends a character to the back of a string
     #[inline]
     fn push_char(&mut self, c: char) {
         assert!(c as uint <= 0x10ffff); // FIXME: #7609: should be enforced on all `char`
-        unsafe {
-            let code = c as uint;
-            if code < MAX_ONE_B {
-                let len = self.len();
-                self.reserve_at_least(len + 1);
-                do as_buf(*self) |buf, _len| {
-                    let buf: *mut u8 = ::cast::transmute(buf);
-                    *ptr::mut_offset(buf, len) = code as u8;
-                }
-                raw::set_len(self, len + 1);
+        let code = c as uint;
+        if code < MAX_ONE_B {
+            unsafe {
+                let v: &mut ~[u8] = cast::transmute(self);
+                v.push(code as u8);
                 return;
             }
-            self.push_multibyte_char(c); 
         }
+
+        fn push_multibyte_char(s: &mut ~str, code: uint) {
+            unsafe {
+                let len = s.len();
+                let v: &mut ~[u8] = cast::transmute(s);
+                v.reserve_at_least(len + 4);
+                if code < MAX_TWO_B { 
+                    v.push_fast((code >> 6u & 31u | TAG_TWO_B) as u8);
+                    v.push_fast((code & 63u | TAG_CONT) as u8);
+                } else if code < MAX_THREE_B {
+                    v.push_fast((code >> 12u & 15u | TAG_THREE_B) as u8);
+                    v.push_fast((code >> 6u & 63u | TAG_CONT) as u8);
+                    v.push_fast((code & 63u | TAG_CONT) as u8);
+                } else {
+                    v.push_fast((code >> 18u & 7u | TAG_FOUR_B) as u8);
+                    v.push_fast((code >> 12u & 63u | TAG_CONT) as u8);
+                    v.push_fast((code >> 6u & 63u | TAG_CONT) as u8);
+                    v.push_fast((code & 63u | TAG_CONT) as u8);
+                }
+            }
+        }
+        push_multibyte_char(self, code);
     }
+
     /**
      * Remove the final character from a string and return it
      *
