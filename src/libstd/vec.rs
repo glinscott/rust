@@ -1143,8 +1143,7 @@ impl<T> OwnedVector<T> for ~[T] {
         // Only make the (slow) call into the runtime if we have to
         use managed;
         if self.capacity() < n {
-            unsafe {
-                let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
+            unsafe fn expand<T>(ptr: *mut *mut raw::VecRepr, n: uint) {
                 let td = get_tydesc::<T>();
                 if ((**ptr).box_header.ref_count ==
                     managed::raw::RC_MANAGED_UNIQUE) {
@@ -1157,6 +1156,10 @@ impl<T> OwnedVector<T> for ~[T] {
                            as *mut raw::VecRepr;
                     (**ptr).unboxed.alloc = alloc;
                 }
+            }
+            unsafe {
+                let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
+                expand<T>(ptr, n);
             }
         }
     }
@@ -1175,8 +1178,7 @@ impl<T> OwnedVector<T> for ~[T] {
     fn reserve(&mut self, n: uint) {
         // Only make the (slow) call into the runtime if we have to
         if self.capacity() < n {
-            unsafe {
-                let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
+            unsafe fn expand<T>(ptr: *mut *mut raw::VecRepr, n: uint) {
                 let td = get_tydesc::<T>();
                 if contains_managed::<T>() {
                     ::at_vec::raw::reserve_raw(td, ptr, n);
@@ -1190,6 +1192,11 @@ impl<T> OwnedVector<T> for ~[T] {
                            as *mut raw::VecRepr;
                     (**ptr).unboxed.alloc = alloc;
                 }
+            }
+
+            unsafe {
+                let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
+                expand<T>(ptr, n);
             }
         }
     }
