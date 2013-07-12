@@ -1140,23 +1140,24 @@ impl<T> OwnedVector<T> for ~[T] {
      */
     #[cfg(stage0)]
     fn reserve(&mut self, n: uint) {
+        unsafe fn expand<T>(ptr: *mut *mut raw::VecRepr, n: uint) {
+            use managed;
+            let td = get_tydesc::<T>();
+            if ((**ptr).box_header.ref_count ==
+                managed::raw::RC_MANAGED_UNIQUE) {
+                // XXX transmute shouldn't be necessary
+                let td = cast::transmute(td);
+                ::at_vec::raw::reserve_raw(td, ptr, n);
+            } else {
+                let alloc = n * sys::nonzero_size_of::<T>();
+                *ptr = realloc_raw(*ptr as *mut c_void, alloc + size_of::<raw::VecRepr>())
+                       as *mut raw::VecRepr;
+                (**ptr).unboxed.alloc = alloc;
+            }
+        }
+
         // Only make the (slow) call into the runtime if we have to
         if self.capacity() < n {
-            unsafe fn expand<T>(ptr: *mut *mut raw::VecRepr, n: uint) {
-                use managed;
-                let td = get_tydesc::<T>();
-                if ((**ptr).box_header.ref_count ==
-                    managed::raw::RC_MANAGED_UNIQUE) {
-                    // XXX transmute shouldn't be necessary
-                    let td = cast::transmute(td);
-                    ::at_vec::raw::reserve_raw(td, ptr, n);
-                } else {
-                    let alloc = n * sys::nonzero_size_of::<T>();
-                    *ptr = realloc_raw(*ptr as *mut c_void, alloc + size_of::<raw::VecRepr>())
-                           as *mut raw::VecRepr;
-                    (**ptr).unboxed.alloc = alloc;
-                }
-            }
             unsafe {
                 let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
                 expand::<T>(ptr, n);
@@ -1176,24 +1177,24 @@ impl<T> OwnedVector<T> for ~[T] {
      */
     #[cfg(not(stage0))]
     fn reserve(&mut self, n: uint) {
+        unsafe fn expand<T>(ptr: *mut *mut raw::VecRepr, n: uint) {
+            let td = get_tydesc::<T>();
+            if contains_managed::<T>() {
+                ::at_vec::raw::reserve_raw(td, ptr, n);
+            } else {
+                let alloc = n * sys::nonzero_size_of::<T>();
+                let size = alloc + size_of::<raw::VecRepr>();
+                if alloc / sys::nonzero_size_of::<T>() != n || size < alloc {
+                    fail!("vector size is too large: %u", n);
+                }
+                *ptr = realloc_raw(*ptr as *mut c_void, size)
+                       as *mut raw::VecRepr;
+                (**ptr).unboxed.alloc = alloc;
+            }
+        }
+
         // Only make the (slow) call into the runtime if we have to
         if self.capacity() < n {
-            unsafe fn expand<T>(ptr: *mut *mut raw::VecRepr, n: uint) {
-                let td = get_tydesc<T>();
-                if contains_managed::<T>() {
-                    ::at_vec::raw::reserve_raw(td, ptr, n);
-                } else {
-                    let alloc = n * sys::nonzero_size_of::<T>();
-                    let size = alloc + size_of::<raw::VecRepr>();
-                    if alloc / sys::nonzero_size_of::<T>() != n || size < alloc {
-                        fail!("vector size is too large: %u", n);
-                    }
-                    *ptr = realloc_raw(*ptr as *mut c_void, size)
-                           as *mut raw::VecRepr;
-                    (**ptr).unboxed.alloc = alloc;
-                }
-            }
-
             unsafe {
                 let ptr: *mut *mut raw::VecRepr = cast::transmute(self);
                 expand::<T>(ptr, n);
